@@ -130,12 +130,9 @@ with st.sidebar:
             st.caption("Llena esto una sola vez. Queda guardado en tu computadora.")
             n_email = st.text_input("Correo con el que entras a Dropi")
             n_pass = st.text_input("Contraseña de Dropi", type="password")
-            st.caption("Si tienes la llave de integración de Dropi, úsala mejor: no caduca y no pide código.")
-            n_key = st.text_input("Llave de integración (opcional)", type="password")
             if st.form_submit_button("Guardar accesos", type="primary"):
                 try:
-                    gs.guardar_credenciales(cuenta, email=n_email, password=n_pass,
-                                            integration_key=n_key)
+                    gs.guardar_credenciales(cuenta, email=n_email, password=n_pass)
                     st.session_state.pop("dropi_clients", None)
                     st.success("Accesos guardados.")
                     st.rerun()
@@ -148,34 +145,9 @@ st.title(f"📦 Estado de Guías — {client.cuenta_label}")
 st.caption("Cada guía traducida a lenguaje simple: qué pasó y qué hacer al respecto.")
 
 with st.sidebar:
-    st.divider()
-    if not puede("gestionar_accesos"):
-        pass
-    elif client.integration_key:
-        st.caption("🔑 Llave de integración guardada (Dropi no la acepta para leer pedidos; se usa el token de sesión).")
-    else:
-        st.markdown("**🔑 Llave de integración de Dropi**")
-        st.caption(f"Para {client.cuenta_label}. En Dropi: Mis Integraciones → botón Ver → Copiar. No caduca.")
-        _key = st.text_input("Pega la llave aquí", type="password", key=f"key_{client.cuenta}")
-        if st.button("Guardar llave", type="primary"):
-            if not _key.strip():
-                st.error("Pega la llave primero.")
-            else:
-                try:
-                    gs.guardar_credenciales(client.cuenta, integration_key=_key)
-                    st.session_state.pop("dropi_clients", None)
-                    st.success("Llave guardada.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"No se pudo guardar: {e}")
-
-with st.sidebar:
 
     if not client.token:
         st.warning("Sin sesión activa.")
-
-        if client.integration_key:
-            st.caption("Usando llave de integración (no caduca).")
 
         if st.button("Iniciar sesión", type="primary"):
             try:
@@ -272,9 +244,6 @@ with st.sidebar:
 
     st.divider()
     stale_threshold = st.number_input("Alertar guías sin movimiento por más de (días)", min_value=1, value=2)
-    st.divider()
-    st.caption("Quién está gestionando ahora mismo (queda guardado en cada registro de llamada/chat).")
-    agente_actual = st.text_input("Agente", value=st.session_state.get("agente_actual", ""), key="agente_actual")
 
 if puede("gestionar_usuarios"):
     with st.expander("👥 Usuarios del sistema"):
