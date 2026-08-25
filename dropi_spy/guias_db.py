@@ -50,6 +50,11 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS login_intentos (
+    usuario TEXT PRIMARY KEY,
+    fallidos INTEGER DEFAULT 0,
+    bloqueado_hasta TEXT
+);
 CREATE TABLE IF NOT EXISTS usuarios (
     usuario TEXT PRIMARY KEY,
     nombre TEXT,
@@ -75,6 +80,11 @@ ROLES = {
         "permisos": {"gestionar", "anotar"},
     },
 }
+
+# Tras 5 claves erradas la cuenta se traba 10 minutos. Es lo que impide que
+# alguien pruebe contraseñas sin parar ahora que la app es pública.
+MAX_INTENTOS = 5
+MINUTOS_BLOQUEO = 10
 
 DEFAULT_SETTINGS = {
     "umbral_bajo": "49",
@@ -490,21 +500,85 @@ def crear_usuario(usuario: str, nombre: str, clave: str, rol: str = "asesor"):
     conn.close()
 
 
-def verificar_usuario(usuario: str, clave: str):
-    """Devuelve el usuario si la clave es correcta y está activo; si no, None."""
+def segundos_bloqueo(usuario: str) -> int:
+    """Segundos que faltan para que la cuenta se destrabe (0 si no lo está)."""
+    u = (usuario or "").strip().lower()
+    if not u:
+        return 0
     conn = get_conn()
-    f = conn.execute("SELECT * FROM usuarios WHERE usuario = ?",
-                     ((usuario or "").strip().lower(),)).fetchone()
-    if not f or not f["activo"]:
-        conn.close()
-        return None
-    ok = _hash_clave(clave, bytes.fromhex(f["salt"])) == f["clave_hash"]
-    if ok:
-        conn.execute("UPDATE usuarios SET ultimo_ingreso = ? WHERE usuario = ?",
-                     (datetime.now(timezone.utc).isoformat(), f["usuario"]))
-        conn.commit()
+    f = conn.execute("SELECT bloqueado_hasta FROM login_intentos WHERE usuario = ?",
+                     (u,)).fetchone()
     conn.close()
-    return dict(f) if ok else None
+    if not f or not f["bloqueado_hasta"]:
+        return 0
+    try:
+        hasta = datetime.fromisoformat(str(f["bloqueado_hasta"]))
+    except ValueError:
+        return 0
+    if hasta.tzinfo is None:
+        hasta = hasta.replace(tzinfo=timezone.utc)
+    faltan = (hasta - datetime.now(timezone.utc)).total_seconds()
+    return int(faltan) if faltan > 0 else 0
+
+
+def _contar_fallo(usuario: str):
+    """Suma un intento fallido y bloquea si ya se pasó del límite."""
+    conn = get_conn()
+    f = conn.execute("SELECT fallidos FROM login_intentos WHERE usuario = ?",
+                     (usuario,)).fetchone()
+    fallidos = (f["fallidos"] if f else 0) + 1
+    bloqueo = None
+    if fallidos >= MAX_INTENTOS:
+        bloqueo = (datetime.now(timezone.utc) + timedelta(minutes=MINUTOS_BLOQUEO)).isoformat()
+        fallidos = 0   # se reinicia el conteo al trabar
+    conn.execute(
+        """INSERT INTO login_intentos (usuario, fallidos, bloqueado_hasta) VALUES (?, ?, ?)
+           ON CONFLICT(usuario) DO UPDATE SET
+             fallidos = excluded.fallidos, bloqueado_hasta = excluded.bloqueado_hasta""",
+        (usuario, fallidos, bloqueo),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _limpiar_intentos(usuario: str):
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO login_intentos (usuario, fallidos, bloqueado_hasta) VALUES (?, 0, NULL)
+           ON CONFLICT(usuario) DO UPDATE SET fallidos = 0, bloqueado_hasta = NULL""",
+        (usuario,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def verificar_usuario(usuario: str, clave: str):
+    """Devuelve el usuario si la clave es correcta y está activo; si no, None.
+    Cuenta los intentos fallidos y traba la cuenta al pasarse del límite."""
+    u = (usuario or "").strip().lower()
+    if segundos_bloqueo(u) > 0:
+        return None
+
+    conn = get_conn()
+    f = conn.execute("SELECT * FROM usuarios WHERE usuario = ?", (u,)).fetchone()
+    conn.close()
+
+    if not f or not f["activo"]:
+        _contar_fallo(u)          # también cuenta si el usuario no existe
+        return None
+
+    ok = _hash_clave(clave, bytes.fromhex(f["salt"])) == f["clave_hash"]
+    if not ok:
+        _contar_fallo(u)
+        return None
+
+    _limpiar_intentos(u)
+    conn = get_conn()
+    conn.execute("UPDATE usuarios SET ultimo_ingreso = ? WHERE usuario = ?",
+                 (datetime.now(timezone.utc).isoformat(), f["usuario"]))
+    conn.commit()
+    conn.close()
+    return dict(f)
 
 
 def listar_usuarios():

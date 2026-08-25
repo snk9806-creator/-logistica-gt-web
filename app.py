@@ -75,12 +75,20 @@ def _pantalla_ingreso():
         u = st.text_input("Usuario")
         c = st.text_input("Clave", type="password")
         if st.form_submit_button("Entrar", type="primary"):
-            user = db.verificar_usuario(u, c)
-            if user:
-                st.session_state.user = user
-                st.rerun()
+            _espera = db.segundos_bloqueo(u)
+            if _espera > 0:
+                st.error(f"🔒 Demasiados intentos fallidos. Espera "
+                         f"{max(1, round(_espera / 60))} minuto(s) y vuelve a intentar.")
             else:
-                st.error("Usuario o clave incorrectos, o la cuenta está desactivada.")
+                user = db.verificar_usuario(u, c)
+                if user:
+                    st.session_state.user = user
+                    st.rerun()
+                elif db.segundos_bloqueo(u) > 0:
+                    st.error(f"🔒 Cuenta bloqueada por {db.MINUTOS_BLOQUEO} minutos "
+                             "tras varios intentos fallidos.")
+                else:
+                    st.error("Usuario o clave incorrectos, o la cuenta está desactivada.")
     st.stop()
 
 
@@ -631,9 +639,47 @@ if only_stale:
 view = view.assign(_orden=view["severity"].map(SEVERITY_ORDER).fillna(9))
 view = view.sort_values(["_orden", "days_since_movement"], ascending=[True, False])
 
+
+# Nombre corto y bien escrito de cada estado de Dropi (su texto viene sin
+# tildes y en mayúsculas). Lo que no esté aquí se muestra tal cual.
+ESTADO_CORTO = {
+    "PENDIENTE CONFIRMACION": "Pendiente confirmación",
+    "PENDIENTE CONFIRMACIÓN": "Pendiente confirmación",
+    "PENDIENTE": "Pendiente de envío",
+    "INCIDENCIA EN RUTA": "Incidencia en ruta",
+    "INCIDENCIA VALIDADA": "Incidencia validada",
+    "NOVEDAD": "Novedad",
+    "NOVEDAD SOLUCIONADA": "Novedad solucionada",
+    "SOLUCION APROBADA": "Solución aprobada",
+    "SOLUCION INCORRECTA": "Solución incorrecta",
+    "EN RUTA": "En ruta",
+    "EN REPARTO": "En reparto",
+    "EN TRANSITO": "En tránsito",
+    "RECOLECTADO": "Recolectado",
+    "EN BODEGA ORIGEN": "En bodega origen",
+    "EN INVENTARIO": "En inventario",
+    "DEVOLUCION": "Devolución",
+    "RECHAZADO": "Rechazado",
+}
+
+
+def _etiqueta_urgencia(fila):
+    """Color de urgencia + el estado REAL de Dropi. No es lo mismo una
+    incidencia que un paquete estancado, y antes se veían iguales."""
+    emoji = gs.SEVERITY_EMOJI.get(fila["severity"], "•")
+    crudo = fila.get("dropi_status")
+    # Ojo: pandas convierte los vacíos en NaN (float), no en None.
+    crudo = crudo.strip() if isinstance(crudo, str) else ""
+    estado = ESTADO_CORTO.get(crudo.upper()) or (
+        crudo.capitalize() if crudo else SEVERITY_LABEL.get(fila["severity"], "Sin estado")
+    )
+    if "estancado" in str(fila.get("label_es") or "").lower():
+        estado += " (estancado)"
+    return f"{emoji} {estado}"
+
+
 show = view.copy()
-show["Urgencia"] = show["severity"].map(
-    lambda s: f"{gs.SEVERITY_EMOJI.get(s, '•')} {SEVERITY_LABEL.get(s, s)}")
+show["Urgencia"] = show.apply(_etiqueta_urgencia, axis=1)
 display_cols = {
     "guide": "Guía", "carrier": "Transportadora", "customer": "Cliente",
     "phone": "Teléfono", "state": "Departamento", "city": "Ciudad",
@@ -673,8 +719,7 @@ with st.expander("📋 Copiar datos (teléfonos y tabla completa)"):
 
     st.markdown("**Tabla completa** (pégala en Excel o Google Sheets):")
     tabla = base.copy()
-    tabla["Urgencia"] = tabla["severity"].map(
-    lambda s: f"{gs.SEVERITY_EMOJI.get(s, '•')} {SEVERITY_LABEL.get(s, s)}")
+    tabla["Urgencia"] = tabla.apply(_etiqueta_urgencia, axis=1)
     tabla = tabla[list(display_cols.keys())].rename(columns=display_cols)
     st.code(tabla.to_csv(sep="\t", index=False), language=None)
 
