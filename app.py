@@ -224,18 +224,12 @@ with st.sidebar:
             else:
                 st.success(f"Sesión activa · vence a las {_vence.strftime('%I:%M %p').lower()}")
 
-        if st.button("Cerrar sesión"):
-            client.token = None
-            client.session.headers.pop("Authorization", None)
-            if client.session_file.exists():
-                client.session_file.unlink()
-            st.rerun()
-
+        # Campo de renovación: aparece solo cuando faltan 2 horas o menos.
         if _vence is not None and (_vence - datetime.now()).total_seconds() <= 2 * 3600:
             st.markdown("**Pegar token nuevo**")
             _tok2 = st.text_input("Token", type="password", key=f"renov_{client.cuenta}",
                                   label_visibility="collapsed")
-            if st.button("Renovar token"):
+            if st.button("Renovar token", type="primary"):
                 if not _tok2.strip():
                     st.error("Pega el token primero.")
                 else:
@@ -247,6 +241,14 @@ with st.sidebar:
                         st.rerun()
                     except Exception as e:
                         st.error(f"Ese token no sirvió: {e}")
+
+        if st.button("Cerrar sesión"):
+            client.token = None
+            client.session.headers.pop("Authorization", None)
+            if client.session_file.exists():
+                client.session_file.unlink()
+            st.rerun()
+
 
     st.divider()
     st.markdown("**📅 Período de pedidos**")
