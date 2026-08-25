@@ -419,6 +419,22 @@ REVISION_MANUAL = {
 }
 
 
+def vencimiento_token(token: Optional[str]):
+    """Lee del propio token cuándo vence (el JWT lo trae adentro).
+    Devuelve un datetime local, o None si no se puede leer."""
+    if not token:
+        return None
+    try:
+        import base64
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        datos = json.loads(base64.urlsafe_b64decode(payload))
+        exp = datos.get("exp")
+        return datetime.fromtimestamp(exp) if exp else None
+    except Exception:
+        return None
+
+
 class Necesita2FA(Exception):
     """Dropi exige 2FA en cada login. `context` trae la lista de contactos a
     los que puede mandar el código (correo/SMS) para que el usuario elija."""

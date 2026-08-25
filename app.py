@@ -210,13 +210,43 @@ with st.sidebar:
                 except Exception as e:
                     st.error(f"Ese token no sirvió: {e}")
     else:
-        st.success("Sesión activa")
+        _vence = gs.vencimiento_token(client.token)
+        if _vence is None:
+            st.success("Sesión activa")
+        else:
+            _faltan = (_vence - datetime.now()).total_seconds() / 3600
+            if _faltan <= 0:
+                st.error(f"⛔ El token venció el {_vence.strftime('%d/%m a las %I:%M %p').lower()}.\n\n"
+                         "Pega uno nuevo abajo para volver a cargar guías.")
+            elif _faltan <= 2:
+                st.warning(f"⏳ El token vence hoy a las {_vence.strftime('%I:%M %p').lower()} "
+                           f"(faltan {int(_faltan * 60)} min). Conviene renovarlo ya.")
+            else:
+                st.success(f"Sesión activa · vence a las {_vence.strftime('%I:%M %p').lower()}")
+
         if st.button("Cerrar sesión"):
             client.token = None
             client.session.headers.pop("Authorization", None)
             if client.session_file.exists():
                 client.session_file.unlink()
             st.rerun()
+
+        if _vence is not None and (_vence - datetime.now()).total_seconds() <= 2 * 3600:
+            st.markdown("**Pegar token nuevo**")
+            _tok2 = st.text_input("Token", type="password", key=f"renov_{client.cuenta}",
+                                  label_visibility="collapsed")
+            if st.button("Renovar token"):
+                if not _tok2.strip():
+                    st.error("Pega el token primero.")
+                else:
+                    try:
+                        client.set_token(_tok2)
+                        gs.get_all_guides(client, auto_relogin=False, days=1)
+                        st.session_state.pop("guides_clave", None)
+                        st.success("Token renovado.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Ese token no sirvió: {e}")
 
     st.divider()
     st.markdown("**📅 Período de pedidos**")
@@ -357,8 +387,16 @@ if st.button("🔄 Actualizar guías", type="primary") or "guides_df" not in st.
         try:
             guides, resumen = gs.get_guides_con_resumen(
                 client, desde=str(fecha_desde), hasta=str(fecha_hasta))
+        except gs.TokenExpirado:
+            st.error("⛔ **El token de Dropi venció.** Pega uno nuevo en la barra "
+                     "de la izquierda (abajo dice *Pegar token nuevo*) y vuelve a intentar.")
+            st.stop()
         except Exception as e:
-            st.error(f"No se pudieron cargar las guías: {e}")
+            _txt = str(e).lower()
+            if "token" in _txt or "401" in _txt:
+                st.error("⛔ **El token de Dropi ya no sirve.** Pega uno nuevo en la barra de la izquierda.")
+            else:
+                st.error(f"No se pudieron cargar las guías: {e}")
             st.stop()
 
         guides = [g for g in guides if g["category"] not in ("entregado", "cancelado")]
